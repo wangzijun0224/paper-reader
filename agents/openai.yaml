@@ -1,0 +1,7 @@
+interface:
+  display_name: "锅炉科研文献系统"
+  short_description: "论文推荐、精读、Zotero、综述与 Vault 检索"
+  default_prompt: "Use $boiler-research-system to generate today's boiler research paper recommendations."
+
+policy:
+  allow_implicit_invocation: true
