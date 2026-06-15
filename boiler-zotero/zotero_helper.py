@@ -180,10 +180,7 @@ def find_item_by_title(db_path, storage_path, title_query):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "command",
-        choices=["list-collection", "list-collections", "list-all", "info"]
-    )
+    parser.add_argument("command", choices=["list-collection", "list-all", "info"])
     parser.add_argument("--name", type=str, help="collection名称")
     parser.add_argument("--key", type=str, help="item key")
     parser.add_argument("--title", type=str, help="按标题模糊搜索")
@@ -191,7 +188,7 @@ def main():
     parser.add_argument("--storage", type=str, default=DEFAULT_STORAGE)
     args = parser.parse_args()
 
-    if args.command in {"list-all", "list-collections"}:
+    if args.command == "list-all":
         cols = list_collections(args.db)
         print(json.dumps(cols, ensure_ascii=False, indent=2))
     elif args.command == "list-collection":

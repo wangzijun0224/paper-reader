@@ -4,9 +4,8 @@
 来源: arXiv + OpenAlex + HuggingFace Daily Papers + Semantic Scholar
 输出: JSON文件，字段包含 title/abstract/doi/arxiv_id/source/score/domains/year/authors
 """
-import argparse, json, re, time, unicodedata, urllib.request, urllib.parse, xml.etree.ElementTree as ET
+import argparse, json, time, urllib.request, urllib.parse, xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from difflib import SequenceMatcher
 
 def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -19,141 +18,6 @@ def load_config():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def parse_date(value):
-    return datetime.strptime(value, "%Y-%m-%d").date()
-
-def resolve_date_range(days=None, start_date=None, end_date=None):
-    end = parse_date(end_date) if end_date else _utcnow().date()
-    if start_date:
-        start = parse_date(start_date)
-    else:
-        effective_days = max(int(days or 1), 1)
-        start = end - timedelta(days=effective_days - 1)
-    if start > end:
-        raise ValueError("start-date 不能晚于 end-date")
-    return start, end
-
-def date_in_range(value, start_date, end_date):
-    if not value:
-        return True
-    try:
-        paper_date = parse_date(str(value)[:10])
-    except ValueError:
-        return True
-    return start_date <= paper_date <= end_date
-
-def normalize_search_text(value):
-    text = unicodedata.normalize("NFKC", value or "").casefold()
-    text = re.sub(r"[^\w\u4e00-\u9fff]+", " ", text)
-    return " ".join(text.split())
-
-def contains_term(text, term):
-    normalized_text = normalize_search_text(text)
-    normalized_term = normalize_search_text(term)
-    if not normalized_term:
-        return False
-    return f" {normalized_term} " in f" {normalized_text} "
-
-def normalize_arxiv_id(value):
-    return re.sub(r"v\d+$", "", (value or "").strip().lower())
-
-def normalize_doi(value):
-    doi = (value or "").strip().lower()
-    doi = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", doi)
-    return doi
-
-def normalize_title(value):
-    title = re.sub(r"^\s*\[[^\]]+\]\s*", "", value or "")
-    return normalize_search_text(title)
-
-def paper_year(paper):
-    value = str(paper.get("year") or "")
-    return int(value[:4]) if value[:4].isdigit() else None
-
-def author_keys(paper):
-    keys = set()
-    for author in paper.get("authors") or []:
-        normalized = normalize_search_text(author)
-        if normalized:
-            keys.add(normalized.split()[-1])
-    return keys
-
-def same_paper(left, right):
-    left_arxiv = normalize_arxiv_id(left.get("arxiv_id"))
-    right_arxiv = normalize_arxiv_id(right.get("arxiv_id"))
-    if left_arxiv and left_arxiv == right_arxiv:
-        return True
-
-    left_doi = normalize_doi(left.get("doi"))
-    right_doi = normalize_doi(right.get("doi"))
-    if left_doi and left_doi == right_doi:
-        return True
-
-    left_title = normalize_title(left.get("title"))
-    right_title = normalize_title(right.get("title"))
-    if not left_title or not right_title:
-        return False
-
-    left_year = paper_year(left)
-    right_year = paper_year(right)
-    years_compatible = not left_year or not right_year or abs(left_year - right_year) <= 1
-    left_authors = author_keys(left)
-    right_authors = author_keys(right)
-    authors_overlap = bool(left_authors & right_authors)
-    authors_compatible = authors_overlap or not left_authors or not right_authors
-    if left_title == right_title:
-        return years_compatible and authors_compatible
-    return (
-        years_compatible
-        and authors_overlap
-        and SequenceMatcher(None, left_title, right_title).ratio() >= 0.96
-    )
-
-def merge_papers(existing, incoming):
-    merged = dict(existing)
-    for field in ("arxiv_id", "doi", "title", "year", "date", "url"):
-        if not merged.get(field) and incoming.get(field):
-            merged[field] = incoming[field]
-
-    if len(incoming.get("abstract") or "") > len(merged.get("abstract") or ""):
-        merged["abstract"] = incoming["abstract"]
-    if len(incoming.get("authors") or []) > len(merged.get("authors") or []):
-        merged["authors"] = incoming["authors"]
-
-    merged["categories"] = sorted(set(merged.get("categories") or []) | set(incoming.get("categories") or []))
-    sources = merged.get("sources") or [merged.get("source", "")]
-    sources += incoming.get("sources") or [incoming.get("source", "")]
-    merged["sources"] = list(dict.fromkeys(source for source in sources if source))
-    merged["source"] = " + ".join(merged["sources"])
-
-    urls = merged.get("urls") or [merged.get("url", "")]
-    urls += incoming.get("urls") or [incoming.get("url", "")]
-    merged["urls"] = list(dict.fromkeys(url for url in urls if url))
-    if merged["urls"]:
-        merged["url"] = merged["urls"][0]
-
-    existing_requires_download = bool(existing.get("needs_download", False))
-    incoming_requires_download = bool(incoming.get("needs_download", False))
-    merged["needs_download"] = existing_requires_download and incoming_requires_download
-    merged["is_target_journal"] = bool(existing.get("is_target_journal") or incoming.get("is_target_journal"))
-    merged["hf_upvotes"] = max(existing.get("hf_upvotes", 0), incoming.get("hf_upvotes", 0))
-    if merged.get("arxiv_id") and merged.get("doi"):
-        merged["version_relation"] = "preprint-and-published"
-    return merged
-
-def deduplicate_papers(papers):
-    unique = []
-    for paper in papers:
-        match_index = next((i for i, existing in enumerate(unique) if same_paper(existing, paper)), None)
-        if match_index is None:
-            paper = dict(paper)
-            paper["sources"] = [paper.get("source")] if paper.get("source") else []
-            paper["urls"] = [paper.get("url")] if paper.get("url") else []
-            unique.append(paper)
-        else:
-            unique[match_index] = merge_papers(unique[match_index], paper)
-    return unique
-
 def _get(url, headers=None, timeout=30):
     req = urllib.request.Request(url)
     req.add_header("User-Agent", "boiler-research-system/1.0 (research@example.com)")
@@ -163,14 +27,12 @@ def _get(url, headers=None, timeout=30):
         return r.read().decode("utf-8")
 
 # ── arXiv ────────────────────────────────────────────────────
-def fetch_arxiv(categories, keywords, start_date, end_date, max_results=200):
+def fetch_arxiv(categories, keywords, days=1, max_results=200):
+    end = _utcnow()
+    start = end - timedelta(days=days)
     cat_query = " OR ".join(f"cat:{c}" for c in categories)
     kw_query = " OR ".join(f'(ti:"{k}" OR abs:"{k}")' for k in keywords[:10])
-    date_query = (
-        f"submittedDate:[{start_date.strftime('%Y%m%d')}0000 "
-        f"TO {end_date.strftime('%Y%m%d')}2359]"
-    )
-    query = f"({cat_query}) AND ({kw_query}) AND {date_query}"
+    query = f"({cat_query}) AND ({kw_query})"
     params = urllib.parse.urlencode({
         "search_query": query,
         "start": 0,
@@ -192,8 +54,6 @@ def fetch_arxiv(categories, keywords, start_date, end_date, max_results=200):
         title = entry.find("atom:title", ns).text.strip().replace("\n", " ")
         abstract = (entry.find("atom:summary", ns).text or "").strip().replace("\n", " ")
         pub_date = entry.find("atom:published", ns).text[:10]
-        if not date_in_range(pub_date, start_date, end_date):
-            continue
         authors = [a.find("atom:name", ns).text for a in entry.findall("atom:author", ns)]
         cats = [c.get("term") for c in entry.findall("atom:category", ns)]
         papers.append({
@@ -206,22 +66,20 @@ def fetch_arxiv(categories, keywords, start_date, end_date, max_results=200):
     return papers
 
 # ── HuggingFace Daily Papers ──────────────────────────────────
-def fetch_huggingface(start_date, end_date):
+def fetch_huggingface(days=1):
     """
     HuggingFace 每日热门论文（社区 upvote 排行）
     API: https://huggingface.co/api/daily_papers?date=YYYY-MM-DD
     无需 API key，返回带 arxiv_id 的列表
     """
     papers = []
-    current_date = start_date
-    while current_date <= end_date:
-        date_str = current_date.strftime("%Y-%m-%d")
+    for d in range(days):
+        date_str = (_utcnow() - timedelta(days=d)).strftime("%Y-%m-%d")
         url = f"https://huggingface.co/api/daily_papers?date={date_str}"
         try:
             data = json.loads(_get(url))
         except Exception as e:
             print(f"[HuggingFace] {date_str} 请求失败: {e}")
-            current_date += timedelta(days=1)
             continue
         for item in data:
             p = item.get("paper", {})
@@ -242,24 +100,24 @@ def fetch_huggingface(start_date, end_date):
                 "url": f"https://arxiv.org/abs/{arxiv_id}",
                 "hf_upvotes": item.get("upvotes", 0)
             })
-        current_date += timedelta(days=1)
     print(f"[HuggingFace] 获取 {len(papers)} 篇")
     return papers
 
 # ── Semantic Scholar ──────────────────────────────────────────
-def fetch_semantic_scholar(keywords, start_date, end_date, max_results=50, api_key=None):
+def fetch_semantic_scholar(keywords, days=1, max_results=50, api_key=None):
     """
     Semantic Scholar 论文搜索
     无 key：10 req/min；免费 key：100 req/min
     申请免费 key: https://www.semanticscholar.org/product/api
     """
+    since = (_utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
     query = " OR ".join(f'"{k}"' for k in keywords[:8])
     fields = "title,abstract,year,authors,externalIds,publicationDate,venue"
     params = urllib.parse.urlencode({
         "query": query,
         "fields": fields,
         "limit": max_results,
-        "publicationDateOrYear": f"{start_date}:{end_date}"
+        "publicationDateOrYear": f"{since}:"
     })
     url = f"https://api.semanticscholar.org/graph/v1/paper/search?{params}"
     headers = {}
@@ -278,15 +136,12 @@ def fetch_semantic_scholar(keywords, start_date, end_date, max_results=50, api_k
         arxiv_id = ext_ids.get("ArXiv")
         doi = ext_ids.get("DOI")
         authors = [a.get("name", "") for a in (w.get("authors") or [])[:5]]
-        publication_date = w.get("publicationDate") or ""
-        if not date_in_range(publication_date, start_date, end_date):
-            continue
         papers.append({
             "arxiv_id": arxiv_id,
             "title": w.get("title", ""),
             "abstract": w.get("abstract") or "",
             "year": str(w.get("year") or ""),
-            "date": publication_date,
+            "date": w.get("publicationDate") or "",
             "authors": authors,
             "categories": [],
             "source": f"SemanticScholar/{w.get('venue','')}" if w.get("venue") else "SemanticScholar",
@@ -382,31 +237,27 @@ IEEE_TARGET_JOURNALS = [
     "IEEE Access",
 ]
 
-def openreview_conferences(start_date, end_date):
-    conferences = []
-    for year in range(start_date.year, end_date.year + 1):
-        conferences.extend([
-            (f"ICLR.cc/{year}/Conference", f"ICLR {year}", year),
-            (f"NeurIPS.cc/{year}/Conference", f"NeurIPS {year}", year),
-            (f"ICML.cc/{year}/Conference", f"ICML {year}", year),
-            (f"AAAI.org/{year}/Conference", f"AAAI {year}", year),
-        ])
-    return conferences
+# OpenReview 顶级 AI 会议（接受论文）
+AI_CONFERENCES = [
+    ("ICLR.cc/2025/Conference",      "ICLR 2025"),
+    ("NeurIPS.cc/2024/Conference",   "NeurIPS 2024"),
+    ("ICML.cc/2024/Conference",      "ICML 2024"),
+    ("AAAI.org/2025/Conference",     "AAAI 2025"),
+]
 
-def fetch_scopus(keywords, start_date, end_date, target_count=100, api_key=None):
+def fetch_scopus(keywords, days=1, target_count=100, api_key=None):
     """
     Elsevier Scopus API，分页抓取约 target_count 篇
     单次上限25条，每页间隔0.5s，每日额度5000次调用
     """
+    import re
     if not api_key:
         print("[Scopus] 未配置 api_keys.scopus，跳过")
         return []
 
+    since = _utcnow() - timedelta(days=days)
     kw_parts = " OR ".join(f'"{k}"' for k in keywords[:6])
-    query = (
-        f"TITLE-ABS-KEY({kw_parts}) AND SRCTYPE(j) "
-        f"AND PUBYEAR > {start_date.year - 1} AND PUBYEAR < {end_date.year + 1}"
-    )
+    query = f"TITLE-ABS-KEY({kw_parts}) AND SRCTYPE(j) AND PUBYEAR > {since.year - 1}"
     fields = "dc:title,dc:description,prism:doi,dc:creator,prism:publicationName,prism:coverDate,prism:issn"
     encoded_query = urllib.parse.quote(query)
     headers = {"X-ELS-APIKey": api_key, "Accept": "application/json"}
@@ -448,8 +299,6 @@ def fetch_scopus(keywords, start_date, end_date, target_count=100, api_key=None)
         doi = entry.get("prism:doi", "")
         journal = entry.get("prism:publicationName", "")
         date = entry.get("prism:coverDate", "")
-        if not date_in_range(date, start_date, end_date):
-            continue
         creator = entry.get("dc:creator", "")
         papers.append({
             "arxiv_id": None,
@@ -471,17 +320,18 @@ def fetch_scopus(keywords, start_date, end_date, target_count=100, api_key=None)
     return papers
 
 
-def fetch_openreview(keywords, start_date, end_date, conferences=None, max_per_conf=50):
+def fetch_openreview(keywords, conferences=None, max_per_conf=50):
     """
     OpenReview API — 抓取顶级 AI 会议已接受论文
     覆盖: ICLR / NeurIPS / ICML / AAAI（无需key）
     会议论文通常也在 arXiv，此函数补充官方接受版本
     """
     if conferences is None:
-        conferences = openreview_conferences(start_date, end_date)
+        conferences = AI_CONFERENCES
+    kw_set = {k.lower() for k in keywords}
     papers = []
 
-    for venue_id, conf_name, conference_year in conferences:
+    for venue_id, conf_name in conferences:
         # 先尝试获取 oral/spotlight/poster 接受论文
         for decision in ["Oral", "Spotlight", "Poster", ""]:
             inv = f"{venue_id}/-/{'Submission' if not decision else decision + '_Submission'}"
@@ -489,8 +339,7 @@ def fetch_openreview(keywords, start_date, end_date, conferences=None, max_per_c
                 f"https://api.openreview.net/notes"
                 f"?invitation={urllib.parse.quote(inv)}"
                 f"&limit={max_per_conf}&offset=0"
-                f"&select=id,cdate,pdate,content.title,content.abstract,"
-                f"content.keywords,content.authors"
+                f"&select=id,content.title,content.abstract,content.keywords,content.authors"
             )
             try:
                 data = json.loads(_get(url, timeout=15))
@@ -502,13 +351,6 @@ def fetch_openreview(keywords, start_date, end_date, conferences=None, max_per_c
                 continue
 
             for note in notes:
-                timestamp = note.get("pdate") or note.get("cdate")
-                note_date = (
-                    datetime.fromtimestamp(timestamp / 1000, timezone.utc).date()
-                    if timestamp else None
-                )
-                if note_date and not (start_date <= note_date <= end_date):
-                    continue
                 content = note.get("content", {})
                 title = (content.get("title") or {})
                 title = title.get("value", "") if isinstance(title, dict) else str(title)
@@ -519,7 +361,7 @@ def fetch_openreview(keywords, start_date, end_date, conferences=None, max_per_c
 
                 # 关键词过滤（只留与研究方向相关的）
                 text = (title + " " + abstract).lower()
-                if not any(contains_term(text, keyword) for keyword in keywords):
+                if not any(k in text for k in kw_set):
                     continue
 
                 kws = content.get("keywords", {})
@@ -531,8 +373,8 @@ def fetch_openreview(keywords, start_date, end_date, conferences=None, max_per_c
                     "arxiv_id": None,
                     "title": title,
                     "abstract": abstract,
-                    "year": str(note_date.year if note_date else conference_year),
-                    "date": note_date.isoformat() if note_date else "",
+                    "year": "2024" if "2024" in venue_id else "2025",
+                    "date": "",
                     "authors": authors[:5],
                     "categories": kws[:3],
                     "source": f"OpenReview/{conf_name}",
@@ -548,11 +390,12 @@ def fetch_openreview(keywords, start_date, end_date, conferences=None, max_per_c
     return papers
 
 
-def fetch_crossref_journals(keywords, start_date, end_date, max_results=30, mailto="research@example.com"):
+def fetch_crossref_journals(keywords, days=1, max_results=30, mailto="research@example.com"):
     """
     通过 Crossref API 按期刊 ISSN 抓取最新论文摘要
     无需 API key，免费使用
     """
+    since = (_utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
     kw_query = " ".join(keywords[:6])
     all_papers = []
 
@@ -560,7 +403,7 @@ def fetch_crossref_journals(keywords, start_date, end_date, max_results=30, mail
     for journal_name, issn in JOURNAL_ISSNS.items():
         params = urllib.parse.urlencode({
             "query": kw_query,
-            "filter": f"issn:{issn},from-pub-date:{start_date},until-pub-date:{end_date}",
+            "filter": f"issn:{issn},from-pub-date:{since}",
             "rows": min(max_results // len(JOURNAL_ISSNS) + 1, 10),
             "select": "DOI,title,abstract,author,published,container-title",
             "mailto": mailto
@@ -585,8 +428,6 @@ def fetch_crossref_journals(keywords, start_date, end_date, max_results=30, mail
             pub = item.get("published") or {}
             date_parts = pub.get("date-parts", [[""]])[0]
             date_str = "-".join(str(d).zfill(2) for d in date_parts if d)
-            if date_str and not date_in_range(date_str, start_date, end_date):
-                continue
             authors = [
                 f"{a.get('given','')} {a.get('family','')}".strip()
                 for a in (item.get("author") or [])[:5]
@@ -611,7 +452,7 @@ def fetch_crossref_journals(keywords, start_date, end_date, max_results=30, mail
     return all_papers
 
 
-def fetch_ieee(keywords, start_date, end_date, max_results=25, api_key=None):
+def fetch_ieee(keywords, days=1, max_results=25, api_key=None):
     """
     IEEE Xplore API — 只抓 IEEE_TARGET_JOURNALS 中的期刊
     key 状态 "waiting" 通常几分钟到几小时后激活
@@ -620,6 +461,7 @@ def fetch_ieee(keywords, start_date, end_date, max_results=25, api_key=None):
         print("[IEEE] 未配置 api_keys.ieee，跳过")
         return []
 
+    since = _utcnow() - timedelta(days=days)
     # IEEE API 使用 start_year/start_month 日期过滤
     kw = " OR ".join(f'"{k}"' for k in keywords[:6])
     # 按目标期刊逐本查询，确保精准
@@ -631,8 +473,7 @@ def fetch_ieee(keywords, start_date, end_date, max_results=25, api_key=None):
         params = urllib.parse.urlencode({
             "querytext": kw,
             "publication_title": journal,
-            "start_year": start_date.year,
-            "end_year": end_date.year,
+            "start_year": since.year,
             "max_records": min(5, max_results // len(IEEE_TARGET_JOURNALS) + 1),
             "sort_order": "desc",
             "sort_field": "publication_date",
@@ -646,9 +487,6 @@ def fetch_ieee(keywords, start_date, end_date, max_results=25, api_key=None):
             continue
 
         for item in data.get("articles", []):
-            publication_date = item.get("publication_date", "")
-            if publication_date and not date_in_range(publication_date, start_date, end_date):
-                continue
             doi = item.get("doi", "")
             authors = [a.get("full_name", "") for a in (item.get("authors", {}).get("authors") or [])[:5]]
             all_papers.append({
@@ -656,7 +494,7 @@ def fetch_ieee(keywords, start_date, end_date, max_results=25, api_key=None):
                 "title": item.get("title", ""),
                 "abstract": item.get("abstract", ""),
                 "year": str(item.get("publication_year", "")),
-                "date": publication_date,
+                "date": item.get("publication_date", ""),
                 "authors": authors,
                 "categories": [],
                 "source": f"IEEE/{item.get('publication_title', journal)}",
@@ -673,14 +511,11 @@ def fetch_ieee(keywords, start_date, end_date, max_results=25, api_key=None):
 
 
 # ── OpenAlex 期刊 ─────────────────────────────────────────────
-def fetch_openalex(keywords, start_date, end_date, max_results=30):
+def fetch_openalex(keywords, days=1, max_results=30):
+    since = (_utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
     kw = " OR ".join(f'"{k}"' for k in keywords[:5])
     params = urllib.parse.urlencode({
-        "filter": (
-            f"title_and_abstract.search:{kw},"
-            f"from_publication_date:{start_date},to_publication_date:{end_date},"
-            "is_paratext:false"
-        ),
+        "filter": f"title_and_abstract.search:{kw},from_publication_date:{since},is_paratext:false",
         "sort": "publication_date:desc",
         "per-page": max_results,
         "select": "id,doi,title,abstract_inverted_index,authorships,publication_year,publication_date,primary_location"
@@ -694,9 +529,6 @@ def fetch_openalex(keywords, start_date, end_date, max_results=30):
 
     papers = []
     for w in data.get("results", []):
-        publication_date = w.get("publication_date", "")
-        if not date_in_range(publication_date, start_date, end_date):
-            continue
         inv = w.get("abstract_inverted_index") or {}
         abstract = ""
         if inv:
@@ -710,7 +542,7 @@ def fetch_openalex(keywords, start_date, end_date, max_results=30):
             "arxiv_id": None, "title": w.get("title") or "",
             "abstract": abstract,
             "year": str(w.get("publication_year", "")),
-            "date": publication_date,
+            "date": w.get("publication_date", ""),
             "authors": authors, "categories": [],
             "source": f"OpenAlex/{source_name}" if source_name else "OpenAlex",
             "doi": doi,
@@ -722,17 +554,17 @@ def fetch_openalex(keywords, start_date, end_date, max_results=30):
 # ── 评分与域标注 ──────────────────────────────────────────────
 def score_paper(paper, config):
     cfg = config["daily_papers"]
-    title = paper["title"]
-    text = title + " " + paper["abstract"]
+    text = (paper["title"] + " " + paper["abstract"]).lower()
     for neg in cfg["negative_keywords"]:
-        if contains_term(text, neg):
+        if neg.lower() in text:
             return -999, []
 
     score = 0.0
     for kw in cfg["keywords"]:
-        if contains_term(title, kw):
+        kl = kw.lower()
+        if kl in paper["title"].lower():
             score += 3.0
-        elif contains_term(text, kw):
+        elif kl in text:
             score += 1.0
 
     for cat in paper.get("categories", []):
@@ -750,7 +582,7 @@ def score_paper(paper, config):
 
     matched_domains = []
     for domain, boost_kws in cfg["domain_boost_keywords"].items():
-        hits = sum(1 for keyword in boost_kws if contains_term(text, keyword))
+        hits = sum(1 for k in boost_kws if k.lower() in text)
         if hits >= 1:
             matched_domains.append(domain)
             score += hits * 0.5
@@ -765,15 +597,13 @@ def score_paper(paper, config):
 def classify_depth(papers, config):
     cfg = config["daily_papers"]
     threshold = cfg["auto_deep_read_score_threshold"]
-    multi_domain_threshold = cfg.get("multi_domain_deep_read_score_threshold", 6.5)
     kw_threshold = cfg["auto_deep_read_keyword_threshold"]
     max_deep = cfg["auto_deep_read_max"]
     top_n = cfg["top_n"]
-    min_score = cfg.get("min_score", 0)
     # 期刊论文（Crossref/IEEE）保留名额，避免被arXiv/HF淹没
     journal_reserved = cfg.get("journal_reserved_slots", 5)
 
-    valid = [p for p in papers if p["score"] >= min_score]
+    valid = [p for p in papers if p["score"] >= 0]
 
     # 分离期刊论文和预印本/会议论文
     journal_papers = [p for p in valid if p.get("needs_download")]
@@ -782,27 +612,31 @@ def classify_depth(papers, config):
     def mark_depth(p):
         is_deep = (
             p["score"] >= threshold or
-            (len(p["domains"]) >= 2 and p["score"] >= multi_domain_threshold) or
+            (len(p["domains"]) >= 2 and p["score"] >= 6.5) or
             any(
-                len([
-                    keyword for keyword in cfg["domain_boost_keywords"].get(d, [])
-                    if contains_term(p["title"] + " " + p["abstract"], keyword)
-                ]) >= kw_threshold
+                len([k for k in cfg["domain_boost_keywords"].get(d, [])
+                     if k.lower() in (p["title"] + p["abstract"]).lower()]) >= kw_threshold
                 for d in p["domains"]
             )
         )
         return is_deep
 
-    reserved_journals = journal_papers[:journal_reserved]
-    remaining_slots = max(top_n - len(reserved_journals), 0)
-    selected = other_papers[:remaining_slots]
-    if len(selected) < remaining_slots:
-        selected += journal_papers[journal_reserved:journal_reserved + remaining_slots - len(selected)]
-    selected += reserved_journals
-    selected.sort(key=lambda paper: paper["score"], reverse=True)
-
     deep_read, quick_read = [], []
-    for p in selected[:top_n]:
+
+    # 先从非期刊论文里选，留出 journal_reserved 个名额
+    other_budget = top_n - journal_reserved
+    for p in other_papers:
+        if len(deep_read) + len(quick_read) >= other_budget:
+            break
+        if mark_depth(p) and len(deep_read) < max_deep:
+            p["read_depth"] = "精读"
+            deep_read.append(p)
+        else:
+            p["read_depth"] = "粗读"
+            quick_read.append(p)
+
+    # 再从期刊论文里选 journal_reserved 篇（按分数排序，但分数>0即可入选）
+    for p in journal_papers[:journal_reserved]:
         if mark_depth(p) and len(deep_read) < max_deep:
             p["read_depth"] = "精读"
             deep_read.append(p)
@@ -815,9 +649,7 @@ def classify_depth(papers, config):
 # ── 主流程 ────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--days", type=int, help="向前检索多少天；未指定起止日期时使用")
-    parser.add_argument("--start-date", type=str, help="固定开始日期，格式 YYYY-MM-DD")
-    parser.add_argument("--end-date", type=str, help="固定结束日期，格式 YYYY-MM-DD；默认今天")
+    parser.add_argument("--days", type=int, default=1)
     parser.add_argument("--out", type=str, required=True)
     parser.add_argument("--no-hf", action="store_true", help="跳过HuggingFace源")
     parser.add_argument("--no-s2", action="store_true", help="跳过Semantic Scholar源")
@@ -829,14 +661,6 @@ def main():
 
     config = load_config()
     cfg = config["daily_papers"]
-    try:
-        start_date, end_date = resolve_date_range(
-            days=args.days or cfg.get("default_days", 1),
-            start_date=args.start_date,
-            end_date=args.end_date,
-        )
-    except ValueError as exc:
-        parser.error(str(exc))
     api_keys = config.get("api_keys", {})
     s2_key = api_keys.get("semantic_scholar")
     ieee_key = api_keys.get("ieee")
@@ -844,35 +668,54 @@ def main():
     crossref_mailto = config.get("journal_sources", {}).get("crossref_mailto", "research@example.com")
 
     all_papers = []
-    all_papers.extend(fetch_arxiv(cfg["arxiv_categories"], cfg["keywords"], start_date, end_date))
-    all_papers.extend(fetch_openalex(cfg["keywords"], start_date, end_date))
+    all_papers.extend(fetch_arxiv(cfg["arxiv_categories"], cfg["keywords"], days=args.days))
+    all_papers.extend(fetch_openalex(cfg["keywords"], days=args.days))
 
     if not args.no_hf:
-        all_papers.extend(fetch_huggingface(start_date, end_date))
+        all_papers.extend(fetch_huggingface(days=args.days))
 
     if not args.no_s2:
         time.sleep(1)
-        all_papers.extend(fetch_semantic_scholar(cfg["keywords"], start_date, end_date, api_key=s2_key))
+        all_papers.extend(fetch_semantic_scholar(cfg["keywords"], days=args.days, api_key=s2_key))
 
     if not args.no_scopus:
         scopus_target = cfg.get("scopus_target_count", 100)
-        all_papers.extend(fetch_scopus(
-            cfg["keywords"], start_date, end_date,
-            target_count=scopus_target, api_key=scopus_key
-        ))
+        all_papers.extend(fetch_scopus(cfg["keywords"], days=args.days, target_count=scopus_target, api_key=scopus_key))
 
     if not args.no_crossref:
-        all_papers.extend(fetch_crossref_journals(
-            cfg["keywords"], start_date, end_date, mailto=crossref_mailto
-        ))
+        all_papers.extend(fetch_crossref_journals(cfg["keywords"], days=args.days, mailto=crossref_mailto))
 
     if not args.no_ieee:
-        all_papers.extend(fetch_ieee(cfg["keywords"], start_date, end_date, api_key=ieee_key))
+        all_papers.extend(fetch_ieee(cfg["keywords"], days=args.days, api_key=ieee_key))
 
     if not args.no_openreview:
-        all_papers.extend(fetch_openreview(cfg["keywords"], start_date, end_date))
+        all_papers.extend(fetch_openreview(cfg["keywords"]))
 
-    unique = deduplicate_papers(all_papers)
+    # 去重：同一篇论文可能同时出现在 arXiv + Scopus + Crossref
+    # 策略：维护 arxiv_id 集合和 doi 集合，两者任一命中即视为重复
+    seen_arxiv = set()
+    seen_doi = set()
+    seen_title = set()
+    unique = []
+    for p in all_papers:
+        aid = (p.get("arxiv_id") or "").strip()
+        doi = (p.get("doi") or "").strip().lower()
+        title_key = p.get("title", "")[:50].lower().strip()
+
+        if aid and aid in seen_arxiv:
+            continue
+        if doi and doi in seen_doi:
+            continue
+        if not aid and not doi and title_key and title_key in seen_title:
+            continue
+
+        if aid:
+            seen_arxiv.add(aid)
+        if doi:
+            seen_doi.add(doi)
+        if title_key:
+            seen_title.add(title_key)
+        unique.append(p)
 
     for p in unique:
         p["score"], p["domains"] = score_paper(p, config)
@@ -882,10 +725,6 @@ def main():
 
     result = {
         "date": datetime.now().strftime("%Y-%m-%d"),
-        "date_range": {
-            "start": start_date.isoformat(),
-            "end": end_date.isoformat(),
-        },
         "total_fetched": len(unique),
         "sources": {
             "arxiv": sum(1 for p in unique if p["source"] == "arXiv"),

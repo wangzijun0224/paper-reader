@@ -1,95 +1,110 @@
-# 锅炉文献雷达系统
+# Boiler Research System — Claude Code Skills
 
-**Vault**: `D:\lunwen\论文阅读`  
-**Zotero**: `D:\zetero`  
-**Skills目录**: `C:\Users\Administrator\.claude\skills\`
+锅炉燃烧研究 + LLM文献工作流的 Claude Code 技能集。配合 `boiler-research-system` 项目使用。
 
-## 快速启动
+## 安装
 
-### Step 1: 初始化Vault目录
-```powershell
-powershell -ExecutionPolicy Bypass -File D:\lunwen\boiler-research-system\scripts\setup_vault.ps1
+将 `skills/` 目录下的5个文件夹复制到：
+
+```
+C:\Users\{用户名}\.claude\skills\
 ```
 
-### Step 2: 安装Skills
-```powershell
-$skills = "$env:USERPROFILE\.claude\skills"
-New-Item -ItemType Directory -Force -Path $skills | Out-Null
+即：
 
-# 从已下载的skill包安装基础框架
-Copy-Item -Recurse -Force "C:\Users\Administrator\Documents\skill\dailypaper-skills-main\skills\*" "$skills\"
-
-# 安装本系统自定义skill
-Copy-Item -Recurse -Force "D:\lunwen\boiler-research-system\skills\*" "$skills\"
+```
+.claude/skills/
+├── boiler-daily/      → 每日文献雷达
+├── boiler-reader/     → 单篇论文阅读（arXiv/DOI/PDF）
+├── boiler-survey/     → 综述生成与更新
+├── boiler-vault/      → Vault检索问答
+└── boiler-zotero/     → Zotero文献处理
 ```
 
-### Step 3: 配置邮箱（可选，用于journal-digest）
-编辑 `D:\lunwen\boiler-research-system\config\daily-digest.config.json`，填入 `crossref_mailto`。
-
-### Step 4: 验证
-在Claude Code中输入：`今日论文推荐`
+重启 Claude Code 后即可使用。
 
 ---
 
-## 日常使用
+## 技能说明
 
-| 命令 | 功能 |
-|------|------|
-| `今日论文推荐` | 每日30篇，自动精读3-5篇 |
-| `过去3天论文推荐` | 补推过去3天 |
-| `/boiler-reader https://arxiv.org/abs/xxxx` | 手动精读单篇 |
-| `/boiler-reader 快速 https://arxiv.org/abs/xxxx` | 粗读单篇 |
-| `/boiler-reader 综述 https://arxiv.org/abs/xxxx` | 提取综述素材 |
-| `/boiler-zotero CFD` | 批量处理Zotero的CFD分类 |
-| `/boiler-survey LLM-Agent/agentic-RAG` | 生成综述 |
-| `/boiler-vault {问题}` | 检索已有笔记回答问题 |
-| `更新索引` | 刷新所有domain索引页 |
+### boiler-zotero — Zotero 文献处理
+
+**触发**：「精读 Zotero 里的 XXX」「读一下{作者}的论文」「批量处理{分类}」
+
+两种模式：
+- **单篇阅读**：两层判断（综述 vs 研究论文 × 精读 vs 粗读）→ 4种笔记格式
+- **批量处理**：整个 Zotero Collection 自动逐篇处理，断点续传
+
+特性：
+- Zotero 运行时（数据库锁定）自动降级，直接读 PDF + 缓存，不中断
+- 研究论文精读自动识别架构图（PDF视觉读取）
+- 写完笔记自动更新 `graph_data.json` 知识图谱
 
 ---
 
-## 系统架构
+### boiler-reader — 单篇论文阅读（非Zotero）
 
-```
-[arXiv API]         ──┐
-[OpenAlex API]      ──┤──→ fetch_papers.py ──→ 评分分档 ──→ boiler-daily SKILL
-                      │        ↓精读候选
-[ScienceDirect]     ──┘    boiler-reader ──→ 精读笔记 (10_精读笔记/)
-(手动登录批量PDF)            ↓粗读候选
-                         粗读卡 (20_粗读卡/)
+**触发**：「精读这篇」「读一下 arxiv.org/abs/xxxx」「分析这个DOI」
 
-[Zotero D:\zetero]  ──→ boiler-zotero SKILL ──→ 60_Zotero导入/
+输入：arXiv 链接/ID、DOI、本地 PDF 路径、论文标题
 
-10_精读笔记/ ──→ boiler-survey ──→ 30_综述/
-10_精读笔记/ ──→ update_graph.py ──→ graph_data.json (RAG知识库)
-所有笔记 ──→ boiler-vault SKILL (Vault内检索问答)
-```
+两层判断同 boiler-zotero：
+- 综述论文 → 使用综述模板（方法脉络、关键文献、文献池）
+- 研究论文精读 → 使用精读模板 + 架构图识别
 
-## Vault目录说明
+---
 
-| 目录 | 说明 |
+### boiler-survey — 综述生成与更新
+
+**触发**：「生成{子方向}综述」「更新综述」「整理{topic}的文献」
+
+扫描指定 domain/subfield 下的精读笔记，聚合生成结构化综述文档。
+
+---
+
+### boiler-vault — Vault 检索问答
+
+**触发**：所有在 Vault 已有笔记范围内的检索和问答
+
+先读索引定位笔记，只基于 Vault 已有内容回答，不联网。
+
+---
+
+### boiler-daily — 每日文献雷达
+
+**触发**：「今日论文推荐」「过去N天论文」「每日推荐」
+
+自动从 arXiv + OpenAlex 抓取 → 多域评分 → 分类精读/粗读 → 生成 Obsidian 推荐笔记。
+
+---
+
+## 配套路径（需与 boiler-research-system 项目对应）
+
+| 配置项 | 默认路径 |
+|--------|----------|
+| 项目目录 | `D:\lunwen\boiler-research-system` |
+| Zotero DB | `D:\zetero\zotero.sqlite` |
+| Zotero Storage | `D:\zetero\storage` |
+| Obsidian Vault | `D:\lunwen\论文阅读` |
+| 笔记输出 | `D:\lunwen\论文阅读\60_Zotero导入\` |
+| 精读模板 | `D:\lunwen\boiler-research-system\templates\精读笔记模板.md` |
+| 综述模板 | `D:\lunwen\boiler-research-system\templates\综述模板.md` |
+| 粗读模板 | `D:\lunwen\boiler-research-system\templates\粗读卡模板.md` |
+
+迁移到新机器时，修改各 SKILL.md 中对应的路径即可。
+
+---
+
+## 知识图谱领域短名
+
+frontmatter `domain` 字段必须使用以下短名：
+
+| 短名 | 含义 |
 |------|------|
-| `00_每日推荐/` | 每日推荐笔记，格式: `YYYY-MM-DD-论文推荐.md` |
-| `10_精读笔记/{Domain}/` | 精读结构化笔记 |
-| `20_粗读卡/` | 粗读速览卡，按月分文件夹 |
-| `30_综述/{Domain}/` | 综述笔记 |
-| `40_概念库/` | 方法/概念定义笔记 |
-| `50_我的笔记/` | 用户手写阅读心得 |
-| `60_Zotero导入/{Domain}/` | Zotero批处理输出 |
-| `90_系统/索引/` | 自动生成的Dataview索引页 |
-| `90_系统/知识图谱/` | graph_data.json (供LLM RAG使用) |
-| `模板/` | 精读/粗读/综述模板 |
-
-## 关于ScienceDirect
-ScienceDirect需要机构账号，不进入每日自动管道。
-使用方式：
-1. 手动登录ScienceDirect
-2. 准备DOI列表CSV文件
-3. 运行 `sciencedirect-live-session-fetcher` (已在skill目录中)
-4. 下载的PDF放入Zotero后，用 `/boiler-zotero` 处理
-
-## 多Domain支持
-一篇论文可同时属于多个domain。在笔记frontmatter中：
-```yaml
-domain: [Boiler, CFD, ROM]
-```
-Obsidian的wikilink + Dataview会自动在各domain索引页中显示该论文。
+| `Boiler` | 燃煤锅炉 · 燃烧 · NOx |
+| `LLM-Agent` | 大模型智能体 · 自主科研 |
+| `CFD` | CFD · 燃烧仿真 · 湍流 |
+| `DigitalTwin` | 数字孪生 · 软测量 · 故障诊断 |
+| `ROM` | 降阶模型 · 代理模型 · PINN |
+| `CS-Foundations` | ML/DL · 时序 · RL · MPC |
+| `KnowledgeInfra` | 知识图谱 · RAG · 文献工作流 |
