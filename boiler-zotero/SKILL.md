@@ -5,30 +5,42 @@ description: Zotero文献处理。支持两种模式：①单篇阅读（精读/
 
 # Zotero 文献处理
 
-## 配置（固定路径）
-- 项目目录: `D:\lunwen\boiler-research-system`
-- Zotero DB: `D:/zetero/zotero.sqlite`
-- Zotero Storage: `D:/zetero/storage`
-- Vault: `D:/lunwen/论文阅读`
-- 输出根目录: `D:/lunwen/论文阅读/60_Zotero导入/`
-- 研究精读模板: `D:\lunwen\boiler-research-system\templates\精读笔记模板.md`
-- 综述模板: `D:\lunwen\boiler-research-system\templates\综述模板.md`
-- 粗读模板: `D:\lunwen\boiler-research-system\templates\粗读卡模板.md`
+## Step 0: 读配置
 
-## 领域短名（frontmatter domain 字段必须用这些短名）
-| 短名 | 含义 |
-|------|------|
-| `Boiler` | 燃煤锅炉 · 燃烧 · NOx |
-| `LLM-Agent` | 大模型智能体 · 自主科研 |
-| `CFD` | CFD · 燃烧仿真 · 湍流 |
-| `DigitalTwin` | 数字孪生 · 软测量 · 故障诊断 |
-| `ROM` | 降阶模型 · 代理模型 · PINN |
-| `CS-Foundations` | ML/DL · 时序 · RL · MPC |
-| `KnowledgeInfra` | 知识图谱 · RAG · 文献工作流 |
+唯一硬编码路径（迁移时只需改这一行）：
+```
+CONFIG = D:\lunwen\boiler-research-system\config\user-config.json
+```
+
+读取后派生所有变量：
+```
+vault          = config.paths.obsidian_vault
+zotero_db      = config.paths.zotero_db
+zotero_storage = config.paths.zotero_storage
+notes_dir      = {vault}/{config.paths.paper_notes_folder}   # 10_精读笔记
+quick_dir      = {vault}/{config.paths.quick_notes_folder}   # 20_粗读卡
+survey_dir     = {vault}/{config.paths.surveys_folder}       # 30_综述
+templates_dir  = {CONFIG所在目录的上级}\templates
+template_深读  = {templates_dir}\精读笔记模板.md
+template_综述  = {templates_dir}\综述模板.md
+template_粗读  = {templates_dir}\粗读卡模板.md
+graph_data     = config.paths.graph_data
+```
+
+后续步骤统一使用上述变量，不再出现任何硬编码路径。
+
+## 四个核心域（frontmatter domain 字段必须用以下全名）
+
+| 域全名 | 核心范围 |
+|--------|---------|
+| `Agentic AI and Multi-Agent Systems` | LLM 自主智能体、多智能体、MARL、工具调用、自动科研 |
+| `Intelligent Boiler Operation, Monitoring and Combustion Optimization` | 锅炉燃烧/运行/监控/诊断，以及为此使用的 RL/MPC/贝叶斯/时序等方法 |
+| `CFD-Enabled Digital Twins and Physics-Informed Surrogate Modeling` | CFD 仿真、降阶模型、PINN/FNO/DeepONet、代理模型、数字孪生架构 |
+| `Knowledge-Centric AI Infrastructure` | 知识图谱、RAG、GraphRAG、知识库、智能体记忆基础设施 |
 
 ## 知识图谱规范（写笔记时必须遵守）
-1. **frontmatter `domain`** 用短名数组，如 `domain: ["LLM-Agent", "KnowledgeInfra"]`
-2. **核心信息表"所属领域"行**：保留实际所属的 `[[短名]]` wikilink，删除其余  
+1. **frontmatter `domain`** 用域全名数组，如 `domain: ["Agentic AI and Multi-Agent Systems", "Knowledge-Centric AI Infrastructure"]`
+2. **核心信息表"所属领域"行**：保留实际所属的 `[[域全名]]` wikilink，删除其余  
    → 这是 Obsidian 图谱中 Paper→Domain 连接的来源
 3. **section 10 相关工作**（精读）/ **section 3 代表性工作**（综述精读）/ **section 9 文献池**：  
    用 `[[论文文件名]]` 格式填写，不要用纯文本  
@@ -123,33 +135,33 @@ Read 工具会以图像方式呈现 PDF 页面，直接看到图。
 
 ### A4. 生成笔记
 
+**保存路径（不区分 Zotero/arXiv/日常，与其他来源完全一致）**：
+
+| 类型 | 路径 |
+|------|------|
+| 研究论文·精读 | `{notes_dir}/{主domain全名}/{标题缩写}.md` |
+| 研究论文·粗读 | `{quick_dir}/{主domain全名}/{标题缩写}-粗读.md` |
+| 综述论文·任意深度 | `{survey_dir}/{主domain全名}/{标题缩写}-综述.md` |
+
+**`{主domain全名}` 必须从以下四个名称中选一个（文件夹已按此命名）**：
+- `Intelligent Boiler Operation, Monitoring and Combustion Optimization`
+- `Agentic AI and Multi-Agent Systems`
+- `CFD-Enabled Digital Twins and Physics-Informed Surrogate Modeling`
+- `Knowledge-Centric AI Infrastructure`
+
+优先级：Boiler域 > Agentic AI域 > CFD域 > Knowledge域
+
+所有 Zotero 来源额外加：`zotero_key: {item_key}`, `import_source: Zotero`
+（注意：不要用 `source: Zotero`，`source` 字段已被期刊/会议名占用，重复会导致 YAML 解析失败）
+
 **研究精读** → 按 `D:\lunwen\boiler-research-system\templates\精读笔记模板.md`
 - 重点：方法架构、关键公式、实验结果对比表、可迁移点
-- 额外字段：`zotero_key: {item_key}`, `source: Zotero`
-- 保存至：`D:/lunwen/论文阅读/60_Zotero导入/{domain}/{标题缩写}.md`
 
 **研究粗读** → 按 `D:\lunwen\boiler-research-system\templates\粗读卡模板.md`
-- 额外字段：`zotero_key: {item_key}`
-- 保存至：`D:/lunwen/论文阅读/60_Zotero导入/{domain}/{标题缩写}-粗读.md`
 
-**综述精读** → 不套研究论文模板，改用以下结构：
-```
-## 综述范围与定位
-## 文献分类框架（综述的骨架）
-## 各方向代表性工作与进展
-## 共识与争议点
-## 研究空白与未解问题
-## 对我写综述/做研究的参考价值
-## 值得深读的关键引用（列出3-5篇）
-```
-- 保存至：`D:/lunwen/论文阅读/60_Zotero导入/{domain}/{标题缩写}-综述精读.md`
+**综述（精读）** → 按 `D:\lunwen\boiler-research-system\templates\综述模板.md`，填全部章节
 
-**综述粗读** → 只提取：
-- 综述覆盖范围（1-2句）
-- 分类框架（列出一级目录）
-- 最关键引用（≤3篇）
-- 对我的价值（1句）
-- 保存至：`D:/lunwen/论文阅读/60_Zotero导入/{domain}/{标题缩写}-综述粗读.md`
+**综述（粗读）** → 按综述模板简化版，只填：综述范围、分类框架（一级目录）、关键引用（≤3篇）、对我的价值
 
 ### A5. 更新知识图谱
 ```powershell
@@ -190,3 +202,81 @@ python D:\lunwen\boiler-research-system\scripts\zotero_helper.py list-collection
 - PDF 不存在且无网络版本 → 标记⚠️跳过
 - 批量模式单次不超过 20 篇（避免 context 过长）
 - 单篇模式无数量限制
+
+---
+
+## 附录：综述精读增强流程（必须执行）
+
+当论文被判定为综述、survey、review、overview、perspective、tutorial 或 state-of-the-art 时，不要按普通研究论文的“方法-实验-结果”模板简单摘要。综述阅读的目标是产出一张可复用的领域地图，必须额外完成以下步骤：
+
+### S1. 先读结构，不先写摘要
+
+优先读取并记录：
+- abstract、introduction 最后一段、contribution/organization 段。
+- 目录或一级/二级标题。
+- taxonomy / classification / framework / roadmap / timeline 相关图表。
+- summary、discussion、challenges、future perspectives、conclusion。
+- 综述表格，包括方法对比表、应用表、benchmark 表、open problems 表。
+
+### S2. 重建 taxonomy
+
+在笔记中必须用表格或树状结构重建作者的分类法，至少包含：
+- 一级分类和二级分类。
+- 每类方法的核心思想。
+- 每类代表文献或代表算法。
+- 优点、局限、适用场景。
+- 作者明显偏好的路线，以及偏好的理由。
+
+如果原文有多张 taxonomy 图（例如 preliminaries、intrusive methods、non-intrusive methods），需要分别重建，不要只写“分为若干类”。
+
+### S3. 抽取代表文献池
+
+综述精读必须建立“文献池”，不要只列本文引用。文献池至少包括：
+- 奠基综述或早期代表。
+- 每个方法分支的代表论文。
+- 作者特别强调的 promising 方法。
+- 与用户研究方向最相关、值得后续精读的论文。
+
+每条文献池记录应说明：角色、贡献、局限、是否需要后续精读。若 Vault 中已有对应笔记，使用 `[[笔记文件名]]` wikilink；若没有，先用纯文本标题并标记“待建笔记”。
+
+### S4. 生成方法选择矩阵
+
+综述笔记必须包含一个“如果我要做 X，该选什么路线”的决策表。表格至少包含：
+- 任务场景。
+- 优先路线。
+- 不推荐路线。
+- 关键风险。
+- 需要验证的数据或实验。
+
+这一步比普通摘要更重要，因为综述的价值在于指导后续选题和系统设计。
+
+### S5. 分离共识、分歧和缺口
+
+必须单独写三类结论：
+- 领域共识：多数文献都同意的判断。
+- 主要分歧：路线之间的取舍、评价指标不统一、适用范围冲突。
+- 研究缺口：缺少 benchmark、缺少真实工程验证、缺少误差/安全/VVUQ、缺少开源代码等。
+
+不要把“局限”写成泛泛的“需要更多研究”。
+
+### S6. 面向用户研究方向做迁移设计
+
+最后必须写“对我的研究的启发”，并且落到可执行层面：
+- 可直接借鉴的模块。
+- 必须改造的模块。
+- 可形成的论文切入点。
+- 初步系统架构或实验设计。
+- 暂时不值得投入的方向。
+
+对于锅炉、CFD、数字孪生、能源 AI 相关综述，必须明确回答：这篇综述能否帮助构建实时代理模型、数字孪生在线层、仿真自动化或 LLM-Agent 工具链。
+
+### S7. 综述笔记质量自检
+
+完成笔记前检查：
+- frontmatter `type: survey-note`，`domain: ["完整领域名"]` 为单行数组。
+- 核心信息表包含领域 wikilink。
+- 至少一个 taxonomy 表或树。
+- 至少一个方法选择矩阵。
+- 至少 5 条文献池记录，其中已有笔记尽量用 `[[...]]`。
+- 有“共识/分歧/缺口/迁移设计/后续精读清单”。
+- 更新知识图谱脚本并确认 `domain=[...]` 非空。

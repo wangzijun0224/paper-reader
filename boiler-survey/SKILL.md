@@ -24,11 +24,6 @@ rg -l "{topic_keywords}" "{Vault}/{paper_notes_folder}" --include="*.md"
 rg -l "{topic_keywords}" "{Vault}/{quick_notes_folder}" --include="*.md"
 ```
 
-**来源C：Zotero导入**
-```powershell
-rg -l "{topic_keywords}" "{Vault}/{zotero_folder}" --include="*.md"
-```
-
 ## Step 2: 提取结构化信息
 对每篇候选笔记，提取：
 - `algorithm`（方法/算法）、`key_finding`（核心结论）、`year`（年份）
@@ -45,7 +40,7 @@ rg -l "{topic_keywords}" "{Vault}/{zotero_folder}" --include="*.md"
 
 ## Step 4: 更新图谱
 ```powershell
-python {项目目录}/scripts/update_graph.py --update-survey "{subfield}"
+python D:\lunwen\boiler-research-system\scripts\update_graph.py --update-survey "{subfield}"
 ```
 
 ## 约束
